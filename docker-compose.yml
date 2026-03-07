@@ -12,12 +12,6 @@ services:
     volumes:
       - ./data/openobserve:/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5080/healthz || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
 
   dashboard:
     build:
@@ -34,6 +28,5 @@ services:
     environment:
       - OPENOBSERVE_URL=http://openobserve:5080
     depends_on:
-      openobserve:
-        condition: service_healthy
+      - openobserve
     restart: unless-stopped
