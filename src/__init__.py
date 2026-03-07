@@ -1,0 +1,1 @@
+"""Log Analytics Platform package."""

@@ -1,0 +1,44 @@
+# OpenObserve Configuration
+openobserve:
+  url: "http://localhost:5080"
+  username: "admin@example.com"
+  password: "admin123"
+  organization: "default"
+  stream_name: "microservice_logs"
+  batch_size: 1000
+  timeout: 30
+
+# Database Configuration
+database:
+  path: "data/analytics.db"
+  connection_timeout: 30
+
+# Analysis Configuration
+analysis:
+  baseline_window_hours: 24
+  anomaly_threshold_sigma: 3.0
+  min_samples_for_baseline: 100
+  correlation_threshold: 0.7
+  
+# Metrics Configuration
+metrics:
+  collection_interval_minutes: 5
+  retention_days: 30
+  
+# Service Discovery
+services:
+  # Automatically discovered from logs
+  # Expected format: service_name-type-identifier
+  # Examples: Internal-core-ms, External-core-ms-2, User-ms-3, Chargebee-EH-4
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/application.log"
+  
+# Dashboard
+dashboard:
+  title: "Log Analytics Platform"
+  refresh_interval_seconds: 60
+  max_incidents_display: 50
