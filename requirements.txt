@@ -5,8 +5,7 @@ requests>=2.31.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 
-# Database
-sqlite3-python>=1.0.0
+# NOTE: sqlite3 is built into Python's standard library - no pip install needed
 
 # Analysis & ML
 scipy>=1.11.0
