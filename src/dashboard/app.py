@@ -350,10 +350,10 @@ selected_id = st.selectbox(
 if selected_id:
     inc = df[df['id'] == selected_id].iloc[0]
     sev = inc['severity']
+    border_color = SEV_COLOR.get(sev, '#888')
 
     st.markdown(
-        f"<div class='detail-panel' style='border-top:3px solid {SEV_COLOR.get(sev,"#888")};'>"
-        # top row
+        f"<div class='detail-panel' style='border-top:3px solid {border_color};'>"
         f"<div style='display:flex;flex-wrap:wrap;gap:2rem;margin-bottom:1rem;'>"
         f"  <div><div class='detail-key'>Service</div>"
         f"       <div class='detail-val'>{inc['service_name']}</div></div>"
@@ -404,7 +404,6 @@ if selected_id:
         unsafe_allow_html=True
     )
 
-    # FIX: use strftime so the T-separator matches stored timestamps
     metrics = db.execute_query(
         """
         SELECT timestamp, metric_name, metric_value
@@ -428,8 +427,10 @@ if selected_id:
             labels={'timestamp_dt': '', 'metric_value': 'Value', 'metric_name': 'Metric'},
             line_shape='spline',
         )
+        # FIX: convert Timestamp to ISO string - pandas>=2 Timestamps can't be
+        # summed as integers which Plotly's annotation positioning requires
         fig_m.add_vline(
-            x=inc['timestamp_dt'],
+            x=inc['timestamp_dt'].isoformat(),
             line_dash='dot', line_color='#f74f4f', line_width=2,
             annotation_text='incident',
             annotation_font_color='#f74f4f',
