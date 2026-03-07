@@ -427,15 +427,28 @@ if selected_id:
             labels={'timestamp_dt': '', 'metric_value': 'Value', 'metric_name': 'Metric'},
             line_shape='spline',
         )
-        # FIX: convert Timestamp to ISO string - pandas>=2 Timestamps can't be
-        # summed as integers which Plotly's annotation positioning requires
-        fig_m.add_vline(
-            x=inc['timestamp_dt'].isoformat(),
-            line_dash='dot', line_color='#f74f4f', line_width=2,
-            annotation_text='incident',
-            annotation_font_color='#f74f4f',
-            annotation_font_size=11,
+
+        # Use add_shape + add_annotation instead of add_vline to avoid
+        # plotly's broken annotation-positioning code with datetime x-axes
+        inc_x = inc['timestamp_dt'].isoformat()
+        fig_m.add_shape(
+            type='line',
+            x0=inc_x, x1=inc_x,
+            y0=0, y1=1,
+            yref='paper',
+            line=dict(color='#f74f4f', width=2, dash='dot'),
         )
+        fig_m.add_annotation(
+            x=inc_x,
+            y=1,
+            yref='paper',
+            text='incident',
+            showarrow=False,
+            xanchor='left',
+            yanchor='bottom',
+            font=dict(color='#f74f4f', size=11),
+        )
+
         plotly_theme(fig_m)
         st.plotly_chart(fig_m, use_container_width=True)
     else:
