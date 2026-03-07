@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   openobserve:
     image: public.ecr.aws/zinclabs/openobserve:latest
+    platform: linux/amd64
     container_name: openobserve
     ports:
       - "5080:5080"
@@ -23,6 +22,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
+    platform: linux/amd64
     container_name: log-analytics-dashboard
     ports:
       - "8501:8501"
