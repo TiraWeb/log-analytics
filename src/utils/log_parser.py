@@ -1,240 +1,166 @@
-"""Log parser for microservice logs in pipe-delimited format."""
+"""Log parser for Velaris.io microservice logs.
+
+CSV format produced by CloudWatch export:
+    timestamp_ms , message
+    1771896412325, <ANSI>level|corr_id|tenant|[req_id|]ISO_timestamp:\t<text>
+
+Blank / stack-trace continuation rows have an empty or whitespace-only message.
+"""
 import re
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from typing import Dict, List, Optional
+from datetime import timezone
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class LogParser:
-    """Parses microservice logs with ANSI color codes and pipe delimiters."""
-    
-    # ANSI color code pattern
-    ANSI_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
-    
-    # Log format: level|correlation_id|tenant_id|[req_id|]timestamp:\tlog_text
-    LOG_PATTERN = re.compile(
-        r'^([^|]+)\|([^|]+)\|([^|]+)\|(?:\[([^|]+)\|\])?([^:]+):\s+(.*)$'
+    """Parses Velaris microservice logs with ANSI colour codes and pipe delimiters."""
+
+    ANSI_PATTERN        = re.compile(r'\x1b\[[0-9;]*m')
+    # Handles both 5-part (with req_id) and 4-part (without) pipe formats:
+    #   level|corr_id|tenant_id|req_id|ISO_ts:\ttext
+    #   level|corr_id|tenant_id|ISO_ts:\ttext
+    LOG_PATTERN         = re.compile(
+        r'^([^|]+)\|([^|]+)\|([^|]+)\|(?:([^|]+)\|)?([^:]+):\s+(.*)$',
+        re.DOTALL
     )
-    
-    # HTTP End Request pattern for latency extraction
-    END_REQUEST_PATTERN = re.compile(r'\[End Request\].*?(\d+)ms')
-    
-    # HTTP status code pattern
-    STATUS_CODE_PATTERN = re.compile(r'\b(\d{3})\b')
-    
-    # Error keywords
-    ERROR_KEYWORDS = ['error', 'exception', 'failed', 'timeout', 'refused', 'denied']
-    
+    END_REQUEST_PATTERN = re.compile(r'\[End Request\].*?(\d+(?:\.\d+)?)\s*ms', re.I)
+    HTTP_METHOD_PATH    = re.compile(r'\[End Request\]\s+(\w+)\s+(\S+)\s+(\d{3})')
+    ERROR_KEYWORDS      = frozenset(['error', 'exception', 'failed', 'timeout',
+                                     'refused', 'denied', 'fatal', 'critical',
+                                     'unhandled', 'uncaught'])
+
     def __init__(self):
-        """Initialize log parser."""
         self.stats = {
-            'total_lines': 0,
-            'parsed_lines': 0,
-            'failed_lines': 0,
-            'merged_stack_traces': 0
+            'total_lines':       0,
+            'parsed_lines':      0,
+            'failed_lines':      0,
+            'merged_stack_traces': 0,
         }
-    
+
+    # ------------------------------------------------------------------
+    # Low-level helpers
+    # ------------------------------------------------------------------
+
     def strip_ansi(self, text: str) -> str:
-        """Remove ANSI color codes from text.
-        
-        Args:
-            text: Text with ANSI codes
-            
-        Returns:
-            Clean text without ANSI codes
-        """
         return self.ANSI_PATTERN.sub('', text)
-    
-    def parse_log_line(self, line: str) -> Optional[Dict[str, str]]:
-        """Parse single log line.
-        
-        Args:
-            line: Raw log line
-            
-        Returns:
-            Dictionary with parsed fields or None if parsing fails
-        """
-        # Strip ANSI codes
-        clean_line = self.strip_ansi(line.strip())
-        
-        if not clean_line:
+
+    def parse_log_line(self, line: str) -> Optional[Dict]:
+        clean = self.strip_ansi(line.strip())
+        if not clean:
             return None
-        
-        # Match log pattern
-        match = self.LOG_PATTERN.match(clean_line)
-        if not match:
+        m = self.LOG_PATTERN.match(clean)
+        if not m:
             return None
-        
-        level, correlation_id, tenant_id, req_id, timestamp, log_text = match.groups()
-        
+        level, corr_id, tenant_id, req_id, ts_raw, log_text = m.groups()
         return {
-            'level': level.strip(),
-            'correlation_id': correlation_id.strip(),
-            'tenant_id': tenant_id.strip(),
-            'req_id': req_id.strip() if req_id else '',
-            'timestamp': timestamp.strip(),
-            'log_text': log_text.strip()
+            'level':          level.strip().lower(),
+            'correlation_id': corr_id.strip(),
+            'tenant_id':      tenant_id.strip(),
+            'req_id':         (req_id or '').strip(),
+            'timestamp':      ts_raw.strip(),
+            'log_text':       log_text.strip(),
         }
-    
-    def extract_http_metrics(self, log_text: str) -> Dict[str, Optional[int]]:
-        """Extract HTTP metrics from log text.
-        
-        Args:
-            log_text: Log message text
-            
-        Returns:
-            Dictionary with status_code and latency_ms
-        """
+
+    def extract_http_metrics(self, log_text: str) -> Dict:
         metrics = {'status_code': None, 'latency_ms': None}
-        
-        # Extract latency from [End Request] lines
-        latency_match = self.END_REQUEST_PATTERN.search(log_text)
-        if latency_match:
-            metrics['latency_ms'] = int(latency_match.group(1))
-        
-        # Extract HTTP status code
-        status_match = self.STATUS_CODE_PATTERN.search(log_text)
-        if status_match:
-            status_code = int(status_match.group(1))
-            # Only consider valid HTTP status codes (100-599)
-            if 100 <= status_code <= 599:
-                metrics['status_code'] = status_code
-        
+        lat_m = self.END_REQUEST_PATTERN.search(log_text)
+        if lat_m:
+            metrics['latency_ms'] = float(lat_m.group(1))
+        ep_m = self.HTTP_METHOD_PATH.search(log_text)
+        if ep_m:
+            sc = int(ep_m.group(3))
+            if 100 <= sc <= 599:
+                metrics['status_code'] = sc
         return metrics
-    
+
     def is_error_log(self, level: str, log_text: str) -> bool:
-        """Determine if log represents an error.
-        
-        Args:
-            level: Log level
-            log_text: Log message text
-            
-        Returns:
-            True if log is an error
-        """
-        # Check log level
-        if level.lower() in ['error', 'fatal', 'critical']:
+        if level in ('error', 'fatal', 'critical', 'warn', 'warning'):
             return True
-        
-        # Check for error keywords in text
-        log_text_lower = log_text.lower()
-        return any(keyword in log_text_lower for keyword in self.ERROR_KEYWORDS)
-    
-    def merge_stack_traces(self, logs: List[Dict]) -> List[Dict]:
-        """Merge multi-line stack traces into single log entries.
-        
-        Stack traces are identified by consecutive logs with same timestamp
-        where subsequent lines don't match the log pattern.
-        
-        Args:
-            logs: List of parsed log dictionaries
-            
-        Returns:
-            List of logs with merged stack traces
-        """
-        if not logs:
-            return logs
-        
-        merged = []
-        current_log = logs[0].copy()
-        
-        for i in range(1, len(logs)):
-            log = logs[i]
-            
-            # If timestamp matches and it's a continuation (empty structured fields)
-            if (log['timestamp'] == current_log['timestamp'] and 
-                not log['level'] and not log['correlation_id']):
-                
-                # Append to current log text
-                current_log['log_text'] += '\n' + log['log_text']
-                self.stats['merged_stack_traces'] += 1
-            else:
-                # New log entry
-                merged.append(current_log)
-                current_log = log.copy()
-        
-        # Add last log
-        merged.append(current_log)
-        
-        return merged
-    
+        txt_lower = log_text.lower()
+        return any(kw in txt_lower for kw in self.ERROR_KEYWORDS)
+
+    # ------------------------------------------------------------------
+    # CSV parsing
+    # ------------------------------------------------------------------
+
     def parse_csv_file(self, filepath: str, service_name: str) -> pd.DataFrame:
-        """Parse CSV log file.
-        
-        Args:
-            filepath: Path to CSV file
-            service_name: Name of the service (extracted from filename)
-            
-        Returns:
-            DataFrame with parsed and enriched logs
-        """
-        logger.info(f"Parsing {filepath} for service {service_name}")
-        
-        # Read CSV
+        """Parse a CloudWatch-exported CSV and return an enriched DataFrame."""
+        logger.info(f"Parsing {filepath}  (service={service_name})")
+
         try:
-            df = pd.read_csv(filepath, header=None, names=['raw_log'])
-        except Exception as e:
-            logger.error(f"Failed to read CSV {filepath}: {e}")
+            # The CSV has a header row: timestamp,message
+            raw = pd.read_csv(
+                filepath,
+                dtype=str,
+                keep_default_na=False,
+                on_bad_lines='skip',
+            )
+        except Exception as exc:
+            logger.error(f"Cannot read CSV {filepath}: {exc}")
             return pd.DataFrame()
-        
-        self.stats['total_lines'] = len(df)
-        
-        # Parse each line
-        parsed_logs = []
-        for _, row in df.iterrows():
-            parsed = self.parse_log_line(row['raw_log'])
+
+        # Normalise column names — handle files that have/lack a header
+        raw.columns = [c.strip().lower() for c in raw.columns]
+        if 'message' not in raw.columns:
+            # No header — treat first col as timestamp, second as message
+            raw.columns = ['timestamp_ms', 'message'] if len(raw.columns) == 2 else raw.columns
+        if 'timestamp' in raw.columns and 'timestamp_ms' not in raw.columns:
+            raw = raw.rename(columns={'timestamp': 'timestamp_ms'})
+
+        self.stats['total_lines'] = len(raw)
+
+        parsed_rows = []
+        for _, row in raw.iterrows():
+            msg = str(row.get('message', ''))
+            parsed = self.parse_log_line(msg)
             if parsed:
-                parsed_logs.append(parsed)
+                parsed['ts_ms'] = row.get('timestamp_ms', '')
+                parsed_rows.append(parsed)
                 self.stats['parsed_lines'] += 1
             else:
                 self.stats['failed_lines'] += 1
-        
-        if not parsed_logs:
-            logger.warning(f"No logs successfully parsed from {filepath}")
+
+        if not parsed_rows:
+            logger.warning(f"Zero log lines parsed from {filepath}")
             return pd.DataFrame()
-        
-        # Merge stack traces
-        parsed_logs = self.merge_stack_traces(parsed_logs)
-        
-        # Convert to DataFrame
-        df_parsed = pd.DataFrame(parsed_logs)
-        
-        # Add service name
-        df_parsed['service_name'] = service_name
-        
-        # Extract HTTP metrics
-        http_metrics = df_parsed['log_text'].apply(self.extract_http_metrics)
-        df_parsed['status_code'] = http_metrics.apply(lambda x: x['status_code'])
-        df_parsed['latency_ms'] = http_metrics.apply(lambda x: x['latency_ms'])
-        
-        # Detect errors
-        df_parsed['is_error'] = df_parsed.apply(
-            lambda row: self.is_error_log(row['level'], row['log_text']),
-            axis=1
+
+        df = pd.DataFrame(parsed_rows)
+        df['service_name'] = service_name
+
+        # Convert timestamp to datetime — prefer ISO string from log body;
+        # fall back to the epoch-ms column from the CSV.
+        def _to_dt(row):
+            try:
+                return pd.to_datetime(row['timestamp'], utc=True)
+            except Exception:
+                pass
+            try:
+                return pd.to_datetime(int(row['ts_ms']), unit='ms', utc=True)
+            except Exception:
+                return pd.NaT
+
+        df['timestamp_dt'] = df.apply(_to_dt, axis=1)
+
+        # HTTP metrics
+        http = df['log_text'].apply(self.extract_http_metrics)
+        df['status_code'] = http.apply(lambda x: x['status_code'])
+        df['latency_ms']  = http.apply(lambda x: x['latency_ms'])
+
+        # Error flag
+        df['is_error'] = df.apply(
+            lambda r: self.is_error_log(r['level'], r['log_text']), axis=1
         )
-        
-        # Convert timestamp to datetime
-        try:
-            df_parsed['timestamp_dt'] = pd.to_datetime(df_parsed['timestamp'])
-        except Exception as e:
-            logger.warning(f"Failed to parse timestamps: {e}")
-            df_parsed['timestamp_dt'] = pd.NaT
-        
+
+        error_count   = int(df['is_error'].sum())
+        latency_count = int(df['latency_ms'].notna().sum())
         logger.info(
-            f"Parsed {self.stats['parsed_lines']}/{self.stats['total_lines']} lines, "
-            f"merged {self.stats['merged_stack_traces']} stack traces, "
-            f"found {df_parsed['is_error'].sum()} errors"
+            f"  {self.stats['parsed_lines']}/{self.stats['total_lines']} parsed  "
+            f"| {error_count} errors  | {latency_count} latency samples"
         )
-        
-        return df_parsed
-    
-    def get_stats(self) -> Dict[str, int]:
-        """Get parsing statistics.
-        
-        Returns:
-            Dictionary with parsing stats
-        """
+        return df
+
+    def get_stats(self) -> Dict:
         return self.stats.copy()

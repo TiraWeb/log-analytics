@@ -1,15 +1,21 @@
-"""ETL pipeline for ingesting CSV log files into OpenObserve."""
+"""ETL pipeline: parse real CSV logs → aggregate into per-minute metrics → SQLite.
+
+This replaces the OpenObserve dependency entirely for the offline sandbox model.
+Parsed logs are aggregated into time-bucketed error_rate and latency_p95 metrics
+and written directly into the existing `metrics` table (source='logs').
+This lets the existing baseline + detection pipeline consume them unchanged.
+"""
 import sys
 import logging
 from pathlib import Path
+from typing import List, Dict, Optional
+
 import pandas as pd
-from typing import List, Dict
+import numpy as np
 
-# Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
-
+from src.utils.db_utils import DatabaseManager
 from src.utils.log_parser import LogParser
-from src.utils.openobserve_client import OpenObserveClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,147 +23,168 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Bucket size for time-series aggregation
+BUCKET_MINUTES = 5
 
-def extract_service_name(filename: str) -> str:
-    """Extract service name from filename.
-    
-    Examples:
-        Internal-core-ms.csv -> Internal-core-ms
-        External-core-ms-2.csv -> External-core-ms-2
-        User-ms-3.csv -> User-ms-3
-        Chargebee-EH-4.csv -> Chargebee-EH-4
-    
+
+def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
+    """Aggregate parsed log DataFrame into per-bucket metric rows.
+
+    Produces two metric series per service:
+      - error_rate  : errors per minute in the bucket
+      - latency_p95 : 95th-percentile latency_ms in the bucket
+
     Args:
-        filename: CSV filename
-        
+        df: Parsed DataFrame from LogParser.parse_csv_file()
+        service_name: service name string
+
     Returns:
-        Service name
+        List of dicts ready for db.insert_metric()
     """
-    return Path(filename).stem
+    if df.empty:
+        return []
+
+    # Ensure we have a proper datetime index
+    df = df.copy()
+    df['timestamp_dt'] = pd.to_datetime(df['timestamp_dt'], utc=True, errors='coerce')
+    df = df.dropna(subset=['timestamp_dt'])
+    if df.empty:
+        return []
+
+    # Remove tz for grouping (SQLite stores naive ISO strings)
+    df['ts_naive'] = df['timestamp_dt'].dt.tz_localize(None)
+    df = df.set_index('ts_naive').sort_index()
+
+    metric_rows = []
+    freq = f'{BUCKET_MINUTES}min'
+
+    # --- error_rate ---
+    err_series = df['is_error'].resample(freq).agg(['sum', 'count'])
+    err_series['error_rate'] = (err_series['sum'] / err_series['count'].clip(lower=1)) * 100
+    for ts, row in err_series.iterrows():
+        if row['count'] == 0:
+            continue
+        metric_rows.append({
+            'timestamp':    ts.isoformat(),
+            'service_name': service_name,
+            'metric_name':  'error_rate',
+            'metric_value': round(float(row['error_rate']), 4),
+            'metric_type':  'error_rate',
+            'source':       'logs',
+        })
+
+    # --- latency_p95 (only for rows that have latency data) ---
+    lat_df = df.dropna(subset=['latency_ms'])
+    if not lat_df.empty:
+        lat_series = lat_df['latency_ms'].resample(freq).quantile(0.95)
+        for ts, val in lat_series.items():
+            if pd.isna(val):
+                continue
+            metric_rows.append({
+                'timestamp':    ts.isoformat(),
+                'service_name': service_name,
+                'metric_name':  'latency_p95',
+                'metric_value': round(float(val), 2),
+                'metric_type':  'latency',
+                'source':       'logs',
+            })
+
+    # --- 5xx_rate ---
+    http_df = df.dropna(subset=['status_code']).copy()
+    if not http_df.empty:
+        http_df['is_5xx'] = http_df['status_code'].astype(float) >= 500
+        s5xx = http_df['is_5xx'].resample(freq).agg(['sum', 'count'])
+        s5xx['rate'] = (s5xx['sum'] / s5xx['count'].clip(lower=1)) * 100
+        for ts, row in s5xx.iterrows():
+            if row['count'] == 0:
+                continue
+            metric_rows.append({
+                'timestamp':    ts.isoformat(),
+                'service_name': service_name,
+                'metric_name':  'http_5xx_rate',
+                'metric_value': round(float(row['rate']), 4),
+                'metric_type':  'error_rate',
+                'source':       'logs',
+            })
+
+    return metric_rows
 
 
-def convert_to_openobserve_format(df: pd.DataFrame) -> List[Dict]:
-    """Convert parsed DataFrame to OpenObserve format.
-    
-    Args:
-        df: Parsed logs DataFrame
-        
+def ingest_csv_file(filepath: Path, parser: LogParser, db: DatabaseManager) -> int:
+    """Parse one CSV, aggregate, and write metrics to SQLite.
+
     Returns:
-        List of log dictionaries ready for ingestion
+        Number of metric rows inserted.
     """
-    logs = []
-    
-    for _, row in df.iterrows():
-        log_entry = {
-            '_timestamp': int(row['timestamp_dt'].timestamp() * 1000000) if pd.notna(row['timestamp_dt']) else 0,
-            'service_name': row['service_name'],
-            'level': row['level'],
-            'correlation_id': row['correlation_id'],
-            'tenant_id': row['tenant_id'],
-            'req_id': row['req_id'],
-            'timestamp': row['timestamp'],
-            'log_text': row['log_text'],
-            'is_error': bool(row['is_error']),
-        }
-        
-        # Add optional fields if present
-        if pd.notna(row['status_code']):
-            log_entry['status_code'] = int(row['status_code'])
-        
-        if pd.notna(row['latency_ms']):
-            log_entry['latency_ms'] = int(row['latency_ms'])
-        
-        logs.append(log_entry)
-    
-    return logs
+    service_name = filepath.stem
+    logger.info(f"Ingesting {filepath.name}  (service={service_name})")
 
+    df = parser.parse_csv_file(str(filepath), service_name)
+    if df.empty:
+        logger.warning(f"  No logs parsed from {filepath.name}")
+        return 0
 
-def ingest_csv_file(filepath: Path, parser: LogParser, client: OpenObserveClient) -> bool:
-    """Ingest single CSV file.
-    
-    Args:
-        filepath: Path to CSV file
-        parser: LogParser instance
-        client: OpenObserveClient instance
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    logger.info(f"Processing {filepath.name}")
-    
-    # Extract service name
-    service_name = extract_service_name(filepath.name)
-    
-    # Parse CSV
-    df_parsed = parser.parse_csv_file(str(filepath), service_name)
-    
-    if df_parsed.empty:
-        logger.warning(f"No logs parsed from {filepath.name}")
-        return False
-    
-    # Convert to OpenObserve format
-    logs = convert_to_openobserve_format(df_parsed)
-    
-    # Ingest to OpenObserve
-    success = client.ingest_logs(logs)
-    
-    if success:
-        logger.info(f"✓ Successfully ingested {len(logs)} logs from {filepath.name}")
-    else:
-        logger.error(f"✗ Failed to ingest logs from {filepath.name}")
-    
-    return success
+    logger.info(
+        f"  Parsed {len(df)} log lines  "
+        f"| errors={df['is_error'].sum()}  "
+        f"| latency rows={df['latency_ms'].notna().sum()}"
+    )
+
+    metrics = aggregate_to_metrics(df, service_name)
+    if not metrics:
+        logger.warning(f"  No metrics aggregated for {service_name}")
+        return 0
+
+    inserted = 0
+    for m in metrics:
+        try:
+            db.insert_metric(
+                timestamp=m['timestamp'],
+                service_name=m['service_name'],
+                metric_name=m['metric_name'],
+                metric_value=m['metric_value'],
+                metric_type=m['metric_type'],
+                source=m['source'],
+            )
+            inserted += 1
+        except Exception:
+            pass  # UNIQUE constraint on duplicate bucket — safe to skip
+
+    logger.info(f"  Wrote {inserted} metric rows for {service_name}")
+    return inserted
 
 
 def main():
-    """Main ETL pipeline."""
+    """Ingest all CSV log files from data/raw_logs/ into SQLite."""
     logger.info("Starting log ingestion pipeline")
-    
-    # Initialize clients
-    parser = LogParser()
-    client = OpenObserveClient()
-    
-    # Check OpenObserve health
-    if not client.check_health():
-        logger.error("OpenObserve is not healthy. Please start it with: docker-compose up -d")
-        return 1
-    
-    logger.info("OpenObserve is healthy")
-    
-    # Find all CSV files in data/raw_logs/
+
     raw_logs_dir = Path("data/raw_logs")
-    
     if not raw_logs_dir.exists():
         logger.error(f"Directory not found: {raw_logs_dir}")
-        logger.info("Please create data/raw_logs/ and copy your CSV files there")
+        logger.info("Creating directory — please copy CSV files there and re-run.")
+        raw_logs_dir.mkdir(parents=True, exist_ok=True)
         return 1
-    
-    csv_files = list(raw_logs_dir.glob("*.csv"))
-    
+
+    csv_files = sorted(raw_logs_dir.glob("*.csv"))
     if not csv_files:
-        logger.warning(f"No CSV files found in {raw_logs_dir}")
-        logger.info("Please copy your log CSV files to data/raw_logs/")
+        logger.warning(f"No CSV files in {raw_logs_dir}")
         return 1
-    
-    logger.info(f"Found {len(csv_files)} CSV files to process")
-    
-    # Process each file
-    success_count = 0
+
+    parser = LogParser()
+    db = DatabaseManager()
+    total_rows = 0
+
     for csv_file in csv_files:
-        if ingest_csv_file(csv_file, parser, client):
-            success_count += 1
-    
-    # Summary
-    logger.info(f"\nIngestion complete: {success_count}/{len(csv_files)} files successful")
-    
-    # Show parsing stats
+        total_rows += ingest_csv_file(csv_file, parser, db)
+
     stats = parser.get_stats()
-    logger.info(f"Total lines: {stats['total_lines']}")
-    logger.info(f"Parsed lines: {stats['parsed_lines']}")
-    logger.info(f"Failed lines: {stats['failed_lines']}")
-    logger.info(f"Merged stack traces: {stats['merged_stack_traces']}")
-    
-    return 0 if success_count == len(csv_files) else 1
+    logger.info("\n=== INGESTION SUMMARY ===")
+    logger.info(f"Files processed : {len(csv_files)}")
+    logger.info(f"Total log lines : {stats['total_lines']}")
+    logger.info(f"Parsed          : {stats['parsed_lines']}")
+    logger.info(f"Failed          : {stats['failed_lines']}")
+    logger.info(f"Metric rows     : {total_rows}")
+    return 0
 
 
 if __name__ == "__main__":
