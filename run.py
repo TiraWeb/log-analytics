@@ -6,15 +6,22 @@
 What it does (in order)
 -----------------------
 1.  pip install -r requirements.txt  (silent, skips if already installed)
-2.  Start OpenObserve via docker compose (hardcoded creds below)
+2.  Start OpenObserve via docker compose
 3.  Wait until OpenObserve /healthz is green
 4.  Configure the microservice_logs stream with correct field types
 5.  Parse every CSV in data/raw_logs/ and push all docs to OpenObserve
-6.  Run the SQLite ingestion pipeline  (opensearch source)
+6.  Wipe stale SQLite data, then aggregate real metrics from OpenObserve
 7.  Open http://localhost:8050 in the browser
 8.  Start the Flask dashboard server on port 8050  (blocks until Ctrl-C)
 
-No arguments needed — just run it.
+Credentials
+-----------
+The script auto-detects the OO credentials from the running container via
+`docker inspect`.  If the container is not yet running it falls back to the
+values defined in docker-compose.yml / docker-compose.override.yml.
+You can also hard-override them with env vars:
+
+    OO_EMAIL=me@host OO_PASSWORD=secret python run.py
 """
 import os
 import subprocess
@@ -24,13 +31,13 @@ import threading
 import webbrowser
 from pathlib import Path
 
-# ── hardcoded credentials ────────────────────────────────────────────────────
-OO_EMAIL    = "admin@loganalytics.local"
-OO_PASSWORD = "LogAnalytics2026!"
-OO_URL      = "http://localhost:5080"
-OO_ORG      = "default"
-STREAM      = "microservice_logs"
-DASH_PORT   = 8050
+# ── defaults (env-var override supported) ───────────────────────────────────
+_DEFAULT_EMAIL    = "root@example.com"
+_DEFAULT_PASSWORD = "Complexpass#123"
+OO_URL      = os.environ.get("OO_URL",      "http://localhost:5080")
+OO_ORG      = os.environ.get("OO_ORG",      "default")
+STREAM      = os.environ.get("OO_STREAM",   "microservice_logs")
+DASH_PORT   = int(os.environ.get("DASH_PORT", "8050"))
 BATCH_SIZE  = 2_000
 HEALTH_RETRIES  = 30
 HEALTH_INTERVAL = 2
@@ -47,9 +54,42 @@ BOLD   = "\033[1m"
 RESET  = "\033[0m"
 
 def step(n, msg):  print(f"\n{BOLD}{CYAN}[{n}]{RESET} {msg}")
-def ok(msg):       print(f"  {GREEN}✔{RESET}  {msg}")
-def warn(msg):     print(f"  {YELLOW}⚠{RESET}  {msg}")
-def fail(msg):     print(f"  {RED}✘{RESET}  {msg}"); sys.exit(1)
+def ok(msg):       print(f"  {GREEN}\u2714{RESET}  {msg}")
+def warn(msg):     print(f"  {YELLOW}\u26a0{RESET}  {msg}")
+def fail(msg):     print(f"  {RED}\u2718{RESET}  {msg}"); sys.exit(1)
+
+
+# ── Credential auto-detection ────────────────────────────────────────────────
+def detect_oo_credentials() -> tuple[str, str]:
+    """Try to read OO creds from environment, then running container, then defaults."""
+    # 1. Explicit env vars win
+    env_email = os.environ.get("OO_EMAIL")
+    env_pass  = os.environ.get("OO_PASSWORD")
+    if env_email and env_pass:
+        return env_email, env_pass
+
+    # 2. Read from running container's environment via docker inspect
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format",
+             "{{range .Config.Env}}{{println .}}{{end}}",
+             "openobserve"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            email = password = None
+            for line in result.stdout.splitlines():
+                if line.startswith("ZO_ROOT_USER_EMAIL="):
+                    email = line.split("=", 1)[1].strip()
+                elif line.startswith("ZO_ROOT_USER_PASSWORD="):
+                    password = line.split("=", 1)[1].strip()
+            if email and password:
+                return email, password
+    except Exception:
+        pass
+
+    # 3. Fall back to OO defaults
+    return _DEFAULT_EMAIL, _DEFAULT_PASSWORD
 
 
 # ── Step 1 — install deps ────────────────────────────────────────────────────
@@ -69,25 +109,14 @@ def install_deps():
 
 
 # ── Step 2 — docker compose ──────────────────────────────────────────────────
-def start_openobserve():
+def start_openobserve(email: str, password: str):
     step(2, "Starting OpenObserve via Docker …")
 
-    # Check docker is available
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
         fail("Docker is not running. Start Docker Desktop and re-run.")
 
-    # Write override with hardcoded creds so docker-compose.yml stays clean
-    override = (
-        "services:\n"
-        "  openobserve:\n"
-        "    environment:\n"
-        f"      - ZO_ROOT_USER_EMAIL={OO_EMAIL}\n"
-        f"      - ZO_ROOT_USER_PASSWORD={OO_PASSWORD}\n"
-        "      - ZO_DATA_DIR=/data\n"
-    )
-    (ROOT / "docker-compose.override.yml").write_text(override)
-
-    # Check if already running
+    # Write override only if container is NOT already running so we don't
+    # change the password on a live container (that causes 401).
     running = subprocess.run(
         ["docker", "inspect", "-f", "{{.State.Running}}", "openobserve"],
         capture_output=True, text=True
@@ -95,6 +124,16 @@ def start_openobserve():
     if running.returncode == 0 and running.stdout.strip() == "true":
         ok("openobserve container already running")
         return
+
+    override = (
+        "services:\n"
+        "  openobserve:\n"
+        "    environment:\n"
+        f"      - ZO_ROOT_USER_EMAIL={email}\n"
+        f"      - ZO_ROOT_USER_PASSWORD={password}\n"
+        "      - ZO_DATA_DIR=/data\n"
+    )
+    (ROOT / "docker-compose.override.yml").write_text(override)
 
     result = subprocess.run(
         ["docker", "compose", "up", "-d", "--pull", "always"],
@@ -123,7 +162,7 @@ def wait_for_oo():
 
 
 # ── Step 4 — stream config ───────────────────────────────────────────────────
-def configure_stream():
+def configure_stream(email: str, password: str):
     step(4, f"Configuring stream '{STREAM}' …")
     import requests
     mappings = {
@@ -142,7 +181,7 @@ def configure_stream():
     }
     url = f"{OO_URL}/api/{OO_ORG}/{STREAM}/_settings"
     try:
-        r = requests.put(url, json=mappings, auth=(OO_EMAIL, OO_PASSWORD), timeout=15)
+        r = requests.put(url, json=mappings, auth=(email, password), timeout=15)
         if r.status_code in (200, 201, 204):
             ok("Stream configured")
         else:
@@ -152,7 +191,7 @@ def configure_stream():
 
 
 # ── Step 5 — push CSV logs ───────────────────────────────────────────────────
-def push_logs():
+def push_logs(email: str, password: str):
     step(5, "Parsing CSVs and pushing logs to OpenObserve …")
     import requests
     from src.utils.log_parser import LogParser
@@ -170,7 +209,7 @@ def push_logs():
     print(f"  Found {len(csv_files)} CSV file(s)")
 
     session = requests.Session()
-    session.auth = (OO_EMAIL, OO_PASSWORD)
+    session.auth = (email, password)
     session.headers.update({"Content-Type": "application/json"})
 
     parser = LogParser()
@@ -178,12 +217,14 @@ def push_logs():
 
     for csv_path in csv_files:
         service = csv_path.stem
-        df = parser.parse_csv_file(str(csv_path), service)
+        # Strip trailing version suffixes like -2, -3, -4 so the service name
+        # is clean (e.g.  "User-ms-4" → "User-ms")
+        clean_service = re.sub(r'-\d+$', '', service)
+        df = parser.parse_csv_file(str(csv_path), clean_service)
         if df.empty:
             warn(f"  {csv_path.name}: no rows parsed")
             continue
 
-        # Build documents
         docs = []
         for _, row in df.iterrows():
             ts = row.get("timestamp_dt")
@@ -196,7 +237,7 @@ def push_logs():
 
             doc = {
                 "_timestamp":     epoch_us,
-                "service_name":   service,
+                "service_name":   clean_service,
                 "log_level":      str(row.get("level", "")).upper(),
                 "message":        str(row.get("log_text", "")),
                 "correlation_id": str(row.get("correlation_id", "")),
@@ -214,10 +255,9 @@ def push_logs():
             docs.append(doc)
 
         if not docs:
-            warn(f"  {service}: 0 valid docs after conversion")
+            warn(f"  {clean_service}: 0 valid docs after conversion")
             continue
 
-        # Batch push
         pushed = 0
         url = f"{OO_URL}/api/{OO_ORG}/{STREAM}/_json"
         for i in range(0, len(docs), BATCH_SIZE):
@@ -231,15 +271,21 @@ def push_logs():
             except Exception as e:
                 warn(f"  Batch error: {e}")
 
-        ok(f"{service}: {pushed:,} / {len(docs):,} docs pushed")
+        ok(f"{clean_service}: {pushed:,} / {len(docs):,} docs pushed")
         total_pushed += pushed
 
     ok(f"Total pushed to OpenObserve: {total_pushed:,} documents")
 
 
-# ── Step 6 — SQLite metric ingestion ────────────────────────────────────────
+# ── Step 6 — SQLite metric ingestion ─────────────────────────────────────────
 def ingest_metrics():
-    step(6, "Aggregating metrics into SQLite …")
+    step(6, "Wiping stale SQLite data and aggregating real metrics …")
+
+    db_path = ROOT / "data" / "analytics.db"
+    if db_path.exists():
+        db_path.unlink()
+        ok("Cleared old analytics.db (stale synthetic data removed)")
+
     result = subprocess.run(
         [sys.executable, "src/ingestion/ingest_logs.py", "--source", "opensearch"],
         cwd=ROOT, capture_output=True, text=True
@@ -247,32 +293,29 @@ def ingest_metrics():
     if result.returncode != 0:
         warn(f"Metric ingestion had errors (non-fatal):\n{result.stderr[:400]}")
     else:
-        ok("Metrics written to SQLite")
+        ok("Real metrics written to SQLite")
 
 
 # ── Step 7 + 8 — open browser + start Flask dashboard ───────────────────────
 def launch_dashboard():
     step(7, f"Launching dashboard at http://localhost:{DASH_PORT} …")
 
-    # Open browser after a short delay so Flask has time to bind
     def _open():
         time.sleep(2)
         webbrowser.open(f"http://localhost:{DASH_PORT}")
     threading.Thread(target=_open, daemon=True).start()
 
-    print(f"\n{BOLD}{GREEN}  ✔ Everything is running!{RESET}")
+    print(f"\n{BOLD}{GREEN}  \u2714 Everything is running!{RESET}")
     print(f"  Dashboard  →  http://localhost:{DASH_PORT}")
     print(f"  OpenObserve →  {OO_URL}/web")
     print(f"  Press Ctrl-C to stop.\n")
 
-    # Start Flask — this blocks until the user hits Ctrl-C
     step(8, "Starting Flask server (Ctrl-C to quit) …")
     os.environ["FLASK_PORT"] = str(DASH_PORT)
     try:
-        from src.dashboard.server import app  # noqa: F401 — Flask app object
+        from src.dashboard.server import app
         app.run(host="0.0.0.0", port=DASH_PORT, debug=False)
     except ImportError:
-        # Fall back to running server.py as a subprocess if imports fail
         subprocess.run(
             [sys.executable, "src/dashboard/server.py"],
             cwd=ROOT,
@@ -281,15 +324,22 @@ def launch_dashboard():
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
+import re  # needed for service name cleanup in push_logs
+
 if __name__ == "__main__":
     print(f"\n{BOLD}{'='*54}{RESET}")
     print(f"{BOLD}   Log Analytics — Full Stack Launcher{RESET}")
     print(f"{BOLD}{'='*54}{RESET}")
 
     install_deps()
-    start_openobserve()
+
+    # Auto-detect creds BEFORE starting container so we use what's already there
+    OO_EMAIL, OO_PASSWORD = detect_oo_credentials()
+    print(f"  Using OO credentials: {OO_EMAIL}")
+
+    start_openobserve(OO_EMAIL, OO_PASSWORD)
     wait_for_oo()
-    configure_stream()
-    push_logs()
+    configure_stream(OO_EMAIL, OO_PASSWORD)
+    push_logs(OO_EMAIL, OO_PASSWORD)
     ingest_metrics()
     launch_dashboard()
