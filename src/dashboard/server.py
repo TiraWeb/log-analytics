@@ -1,4 +1,4 @@
-"""Flask API server — replaces Streamlit entirely.
+"""Flask API server.
 
 Runs on http://localhost:8050 and serves:
   GET /api/incidents      — filtered incident list
@@ -7,12 +7,9 @@ Runs on http://localhost:8050 and serves:
   GET /api/baselines      — all baselines
   GET /api/summary        — KPI counts
   GET /api/services       — distinct service names
+  GET /api/evaluate       — evaluation results (placeholder if not yet generated)
+  POST /api/resolve/<id>  — mark incident resolved
   GET /                   — serves dashboard.html
-
-Start with:
-    python src/dashboard/server.py
-or via the helper:
-    python reset_and_run.py --serve
 """
 import sys
 import json
@@ -33,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent))
 
-# ── DB singleton ────────────────────────────────────────────────────────────
+# ── DB singleton ──────────────────────────────────────────────────────────────
 _db = None
 
 def get_db() -> DatabaseManager:
@@ -43,20 +40,20 @@ def get_db() -> DatabaseManager:
     return _db
 
 
-# ── CORS helper ─────────────────────────────────────────────────────────────
+# ── CORS helper ───────────────────────────────────────────────────────────────
 @app.after_request
 def add_cors(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 
-# ── Static: serve the dashboard HTML ────────────────────────────────────────
+# ── Static ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return send_from_directory(str(Path(__file__).parent), 'dashboard.html')
 
 
-# ── /api/summary ─────────────────────────────────────────────────────────────
+# ── /api/summary ──────────────────────────────────────────────────────────────
 @app.route('/api/summary')
 def summary():
     db = get_db()
@@ -73,7 +70,6 @@ def summary():
     """)
     row = rows[0] if rows else {}
 
-    # Service health: number of open incidents per service
     svc_rows = db.execute_query("""
         SELECT service_name,
                COUNT(*) as open_incidents,
@@ -84,7 +80,6 @@ def summary():
         ORDER BY open_incidents DESC
     """)
 
-    # Recent trend: incidents per hour for last 24h
     trend = db.execute_query("""
         SELECT strftime('%Y-%m-%dT%H:00:00', timestamp) AS hour,
                COUNT(*) AS count
@@ -94,10 +89,9 @@ def summary():
         ORDER BY hour
     """)
 
-    # Metric source breakdown
-    sources = db.execute_query("""
-        SELECT source, COUNT(*) as n FROM metrics GROUP BY source
-    """)
+    sources = db.execute_query(
+        "SELECT source, COUNT(*) as n FROM metrics GROUP BY source"
+    )
 
     return jsonify({
         'totals': dict(row),
@@ -107,7 +101,7 @@ def summary():
     })
 
 
-# ── /api/services ────────────────────────────────────────────────────────────
+# ── /api/services ─────────────────────────────────────────────────────────────
 @app.route('/api/services')
 def services():
     db = get_db()
@@ -117,13 +111,13 @@ def services():
     return jsonify([r['service_name'] for r in rows])
 
 
-# ── /api/incidents ───────────────────────────────────────────────────────────
+# ── /api/incidents ────────────────────────────────────────────────────────────
 @app.route('/api/incidents')
 def incidents():
     db  = get_db()
     svc = request.args.get('service', '')
     sev = request.args.get('severity', '')
-    sta = request.args.get('status', '')    # 'open' | 'resolved' | ''
+    sta = request.args.get('status', '')
     lim = min(int(request.args.get('limit', 200)), 500)
 
     where, params = [], []
@@ -148,14 +142,11 @@ def incidents():
 @app.route('/api/incidents/<int:inc_id>')
 def incident_detail(inc_id):
     db   = get_db()
-    rows = db.execute_query(
-        'SELECT * FROM incidents WHERE id = ?', (inc_id,)
-    )
+    rows = db.execute_query('SELECT * FROM incidents WHERE id = ?', (inc_id,))
     if not rows:
         abort(404)
     inc = rows[0]
 
-    # Metric window ±90 minutes
     metrics = db.execute_query(
         """
         SELECT timestamp, metric_name, metric_value, source
@@ -168,7 +159,6 @@ def incident_detail(inc_id):
         (inc['service_name'], inc['timestamp'], inc['timestamp'])
     )
 
-    # Baselines for this service
     baselines = db.execute_query(
         """
         SELECT metric_name, mean, stddev, p95, p99, sample_count
@@ -178,27 +168,22 @@ def incident_detail(inc_id):
         """,
         (inc['service_name'],)
     )
-    # Deduplicate — keep latest per metric_name
     seen, bl_dedup = set(), []
     for b in baselines:
         if b['metric_name'] not in seen:
             bl_dedup.append(b)
             seen.add(b['metric_name'])
 
-    return jsonify({
-        'incident': inc,
-        'metrics':  metrics,
-        'baselines': bl_dedup,
-    })
+    return jsonify({'incident': inc, 'metrics': metrics, 'baselines': bl_dedup})
 
 
 # ── /api/metrics ──────────────────────────────────────────────────────────────
 @app.route('/api/metrics')
 def metrics():
-    db      = get_db()
-    svc     = request.args.get('service', '')
-    metric  = request.args.get('metric', '')
-    hours   = int(request.args.get('hours', 24))
+    db     = get_db()
+    svc    = request.args.get('service', '')
+    metric = request.args.get('metric', '')
+    hours  = int(request.args.get('hours', 24))
 
     where, params = [], []
     if svc:    where.append('service_name = ?');  params.append(svc)
@@ -230,7 +215,6 @@ def baselines():
         f"FROM baselines WHERE {wc} ORDER BY service_name, metric_name",
         tuple(params)
     )
-    # Deduplicate — latest per (service, metric)
     seen, out = set(), []
     for r in rows:
         key = (r['service_name'], r['metric_name'])
@@ -243,12 +227,30 @@ def baselines():
 # ── /api/evaluate ─────────────────────────────────────────────────────────────
 @app.route('/api/evaluate')
 def evaluate():
-    """Return evaluation metrics if the evaluate.py output exists."""
+    """Return evaluation metrics.  Returns a placeholder if not yet generated."""
     eval_path = Path('data/evaluation_results.json')
-    if not eval_path.exists():
-        return jsonify({'error': 'No evaluation results — run: python src/analysis/evaluate.py'}), 404
-    with open(eval_path) as f:
-        return jsonify(json.load(f))
+    if eval_path.exists():
+        with open(eval_path) as f:
+            return jsonify(json.load(f))
+
+    # Return a structured placeholder instead of 404 so the dashboard renders
+    return jsonify({
+        'generated_at':       None,
+        'status':             'pending',
+        'message':            'Evaluation not yet run. Pipeline must complete first.',
+        'precision':          0,
+        'recall':             0,
+        'f1':                 0,
+        'tp':                 0,
+        'fp':                 0,
+        'fn':                 0,
+        'ground_truth_count': 0,
+        'detected_count':     0,
+        'per_service':        {},
+        'true_positives':     [],
+        'false_positives':    [],
+        'false_negatives':    [],
+    })
 
 
 # ── /api/resolve/<id> (POST) ──────────────────────────────────────────────────
