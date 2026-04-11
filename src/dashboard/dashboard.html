@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log Analytics — Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+<style>
+:root {
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  --color-bg:            #f5f5f0;
+  --color-surface:       #ffffff;
+  --color-surface-2:     #fafaf8;
+  --color-surface-offset:#f0efeb;
+  --color-border:        rgba(0,0,0,0.08);
+  --color-divider:       rgba(0,0,0,0.06);
+
+  --color-text:          #1a1917;
+  --color-text-muted:    #6b6a67;
+  --color-text-faint:    #a8a7a4;
+
+  --color-primary:       #0a6e74;
+  --color-primary-hover: #085a60;
+  --color-primary-hl:    #e0f0f1;
+
+  --color-critical:      #c0392b;
+  --color-critical-bg:   #fdf2f1;
+  --color-critical-bd:   #e8c5c2;
+  --color-high:          #c0710a;
+  --color-high-bg:       #fef6ed;
+  --color-high-bd:       #e8d1b0;
+  --color-medium:        #8a7a00;
+  --color-medium-bg:     #fdfbea;
+  --color-medium-bd:     #e0d890;
+  --color-low:           #2e7d32;
+  --color-low-bg:        #f1f8f2;
+  --color-low-bd:        #b8d9bb;
+
+  --color-success:       #2e7d32;
+  --color-warning:       #c0710a;
+  --color-error:         #c0392b;
+
+  --radius-sm:  0.375rem;
+  --radius-md:  0.5rem;
+  --radius-lg:  0.75rem;
+  --radius-xl:  1rem;
+  --radius-full:9999px;
+
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md:  0 3px 10px rgba(0,0,0,0.07);
+  --shadow-lg:  0 8px 24px rgba(0,0,0,0.09);
+
+  --sidebar-w: 224px;
+  --header-h:  56px;
+  --transition: 160ms cubic-bezier(0.16,1,0.3,1);
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.375rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-bg);
+  min-height: 100dvh;
+  display: flex;
+  overflow-x: hidden;
+}
+button { cursor: pointer; font: inherit; border: none; background: none; }
+a { color: inherit; text-decoration: none; }
+img, svg { display: block; }
+
+/* ==================== SIDEBAR ==================== */
+.sidebar {
+  width: var(--sidebar-w);
+  min-height: 100dvh;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0;
+  z-index: 100;
+  transition: transform var(--transition);
+}
+.sidebar-logo {
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.logo-mark {
+  width: 28px; height: 28px;
+  background: var(--color-primary);
+  border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.logo-mark svg { color: white; }
+.logo-text {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+.logo-sub {
+  font-size: 0.65rem;
+  color: var(--color-text-faint);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-section-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-faint);
+  padding: 12px 8px 4px 8px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background var(--transition), color var(--transition);
+  user-select: none;
+}
+.nav-item:hover { background: var(--color-surface-offset); color: var(--color-text); }
+.nav-item.active {
+  background: var(--color-primary-hl);
+  color: var(--color-primary);
+}
+.nav-item svg { flex-shrink: 0; opacity: 0.7; }
+.nav-item.active svg { opacity: 1; }
+.nav-badge {
+  margin-left: auto;
+  background: var(--color-critical);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  min-width: 18px;
+  text-align: center;
+}
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid var(--color-divider);
+}
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%,100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ==================== MAIN ==================== */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  height: var(--header-h);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.topbar-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+}
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
+  cursor: pointer;
+  border: none;
+}
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+}
+.btn-primary:hover { background: var(--color-primary-hover); box-shadow: var(--shadow-sm); }
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+.btn-ghost:hover { background: var(--color-surface-offset); color: var(--color-text); }
+.btn-sm { padding: 5px 10px; font-size: var(--text-xs); }
+
+.page-content {
+  padding: 28px;
+  flex: 1;
+}
+
+/* ==================== PAGES ==================== */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ==================== CARDS / GRID ==================== */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.kpi-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+}
+.kpi-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+.kpi-value {
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-sub {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  margin-top: 5px;
+}
+.kpi-card.critical .kpi-value { color: var(--color-critical); }
+.kpi-card.success  .kpi-value { color: var(--color-success); }
+.kpi-card.primary  .kpi-value { color: var(--color-primary); }
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.chart-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+.card-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 16px;
+}
+.chart-wrap { position: relative; }
+
+/* ==================== SERVICE HEALTH GRID ==================== */
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.service-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: box-shadow var(--transition), border-color var(--transition);
+}
+.service-card:hover { box-shadow: var(--shadow-md); border-color: rgba(0,0,0,0.14); }
+.service-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.service-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.service-count {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* ==================== BADGE / CHIP ==================== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid;
+}
+.badge-critical { background: var(--color-critical-bg); color: var(--color-critical); border-color: var(--color-critical-bd); }
+.badge-high     { background: var(--color-high-bg);     color: var(--color-high);     border-color: var(--color-high-bd); }
+.badge-medium   { background: var(--color-medium-bg);   color: var(--color-medium);   border-color: var(--color-medium-bd); }
+.badge-low      { background: var(--color-low-bg);      color: var(--color-low);      border-color: var(--color-low-bd); }
+.badge-open     { background: #fdf2f1; color: var(--color-critical); border-color: var(--color-critical-bd); }
+.badge-resolved { background: var(--color-low-bg); color: var(--color-success); border-color: var(--color-low-bd); }
+.badge-source   { background: var(--color-primary-hl); color: var(--color-primary); border-color: rgba(10,110,116,0.2); }
+
+/* ==================== INCIDENT TABLE ==================== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+}
+.search-wrap svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-faint);
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  padding: 8px 12px 8px 34px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  outline: none;
+  transition: border-color var(--transition);
+}
+.search-input:focus { border-color: var(--color-primary); }
+.filter-select {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  outline: none;
+  cursor: pointer;
+}
+.table-wrap {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  background: var(--color-surface-2);
+  padding: 11px 16px;
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-divider);
+}
+tbody tr {
+  border-bottom: 1px solid var(--color-divider);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--color-surface-2); }
+tbody tr.selected { background: var(--color-primary-hl); }
+tbody td {
+  padding: 12px 16px;
+  font-size: var(--text-sm);
+  vertical-align: middle;
+}
+.td-service {
+  font-weight: 600;
+  color: var(--color-text);
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.td-type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.td-ts {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.td-conf {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+.conf-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conf-bar {
+  width: 48px;
+  height: 4px;
+  background: var(--color-surface-offset);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.conf-bar-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: var(--radius-full);
+}
+
+/* ==================== DETAIL PANEL ==================== */
+.detail-panel {
+  margin-top: 20px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.detail-header {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--color-divider);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.detail-service {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.detail-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+.detail-col {
+  padding: 20px 22px;
+}
+.detail-col + .detail-col { border-left: 1px solid var(--color-divider); }
+.detail-section-title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-faint);
+  margin-bottom: 12px;
+}
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+.detail-key {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+}
+.detail-val {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  font-weight: 500;
+}
+.rc-card {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-top: 4px;
+}
+.rc-summary {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 10px;
+  line-height: 1.45;
+}
+.rc-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: flex-start;
+}
+.rc-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+  min-width: 90px;
+  padding-top: 2px;
+}
+.rc-chip {
+  display: inline-block;
+  background: var(--color-primary-hl);
+  color: var(--color-primary);
+  border: 1px solid rgba(10,110,116,0.2);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  margin: 0 3px 3px 0;
+}
+.rc-action {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.metric-chart-wrap {
+  padding: 20px 22px;
+  border-top: 1px solid var(--color-divider);
+}
+.btn-resolve {
+  background: var(--color-low-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-low-bd);
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-resolve:hover { background: var(--color-low-bd); }
+
+/* ==================== BASELINES PAGE ==================== */
+.baseline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.baseline-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+}
+.bl-service {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+  margin-bottom: 4px;
+}
+.bl-metric {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  margin-bottom: 12px;
+}
+.bl-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.bl-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bl-stat-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-faint);
+  font-weight: 700;
+}
+.bl-stat-val {
+  font-size: var(--text-base);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+.bl-samples {
+  margin-top: 10px;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+/* ==================== EVALUATION PAGE ==================== */
+.eval-hero {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.eval-metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 24px 22px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+.eval-score {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0;
+}
+.eval-label { font-size: var(--text-sm); color: var(--color-text-muted); font-weight: 600; }
+.eval-sub   { font-size: var(--text-xs); color: var(--color-text-faint); margin-top: 4px; }
+.score-good { color: var(--color-success); }
+.score-ok   { color: var(--color-warning); }
+.score-bad  { color: var(--color-error); }
+.confusion-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.confusion-cell {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+.confusion-num {
+  font-size: 2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.confusion-tp { color: var(--color-success); }
+.confusion-fp { color: var(--color-error); }
+.confusion-fn { color: var(--color-warning); }
+.confusion-label { font-size: var(--text-xs); color: var(--color-text-muted); font-weight: 600; margin-top: 4px; }
+
+/* ==================== EMPTY STATE ==================== */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-muted);
+}
+.empty-icon {
+  width: 48px; height: 48px;
+  color: var(--color-text-faint);
+  margin-bottom: 14px;
+}
+.empty-title { font-size: var(--text-base); font-weight: 600; color: var(--color-text); margin-bottom: 6px; }
+.empty-sub   { font-size: var(--text-sm); color: var(--color-text-muted); max-width: 36ch; line-height: 1.6; }
+.code-block {
+  margin-top: 14px;
+  background: var(--color-surface-offset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-primary);
+}
+
+/* ==================== SKELETON ==================== */
+@keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+.skeleton {
+  background: linear-gradient(90deg, var(--color-surface-offset) 25%, var(--color-surface-2) 50%, var(--color-surface-offset) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+.skel-kpi  { height: 80px; border-radius: var(--radius-lg); }
+.skel-row  { height: 44px; margin-bottom: 2px; }
+
+/* ==================== TOAST ==================== */
+.toast-container {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+.toast {
+  background: var(--color-text);
+  color: var(--color-bg);
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-lg);
+  animation: slide-in 0.2s ease;
+}
+@keyframes slide-in { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ==================== RESPONSIVE ==================== */
+@media (max-width: 900px) {
+  .kpi-grid        { grid-template-columns: repeat(2, 1fr); }
+  .chart-grid      { grid-template-columns: 1fr; }
+  .detail-body     { grid-template-columns: 1fr; }
+  .detail-col + .detail-col { border-left: none; border-top: 1px solid var(--color-divider); }
+}
+@media (max-width: 680px) {
+  :root { --sidebar-w: 0px; }
+  .sidebar { transform: translateX(-224px); width: 224px; }
+  .sidebar.open { transform: translateX(0); }
+  .main { margin-left: 0; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  .page-content { padding: 16px; }
+  .eval-hero { grid-template-columns: 1fr; }
+  .confusion-row { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">Log Analytics</div>
+      <div class="logo-sub">CS6P05NM</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Monitor</div>
+    <div class="nav-item active" data-page="overview">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Overview
+    </div>
+    <div class="nav-item" data-page="incidents">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      Incidents
+      <span class="nav-badge" id="badge-incidents">0</span>
+    </div>
+    <div class="nav-section-label">Analysis</div>
+    <div class="nav-item" data-page="baselines">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Baselines
+    </div>
+    <div class="nav-item" data-page="evaluation">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Evaluation
+    </div>
+    <div class="nav-section-label">Info</div>
+    <div class="nav-item" data-page="about">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      About
+    </div>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="status-pill">
+      <div class="status-dot"></div>
+      <span id="db-status">Loading…</span>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <header class="topbar">
+    <div class="topbar-title" id="page-title">Overview</div>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost btn-sm" id="btn-refresh">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        Refresh
+      </button>
+      <a href="https://github.com/TiraWeb/log-analytics" target="_blank" class="btn btn-ghost btn-sm">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+        GitHub
+      </a>
+    </div>
+  </header>
+
+  <div class="page-content">
+
+    <!-- ========== OVERVIEW PAGE ========== -->
+    <section class="page active" id="page-overview">
+      <div class="kpi-grid" id="kpi-grid">
+        <div class="skeleton skel-kpi"></div>
+        <div class="skeleton skel-kpi"></div>
+        <div class="skeleton skel-kpi"></div>
+        <div class="skeleton skel-kpi"></div>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card">
+          <div class="card-title">Severity Breakdown</div>
+          <div class="chart-wrap" style="height:200px">
+            <canvas id="chart-severity"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="card-title">Incident Timeline (24 h)</div>
+          <div class="chart-wrap" style="height:200px">
+            <canvas id="chart-timeline"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="card-title" style="margin-bottom:12px">Service Health</div>
+      <div class="service-grid" id="service-grid"></div>
+    </section>
+
+    <!-- ========== INCIDENTS PAGE ========== -->
+    <section class="page" id="page-incidents">
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input class="search-input" id="incident-search" type="text" placeholder="Search service, type, description…">
+        </div>
+        <select class="filter-select" id="filter-service"><option value="">All services</option></select>
+        <select class="filter-select" id="filter-severity"><option value="">All severities</option><option>critical</option><option>high</option><option>medium</option><option>low</option></select>
+        <select class="filter-select" id="filter-status"><option value="">All</option><option value="open">Open</option><option value="resolved">Resolved</option></select>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-filters">Clear</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Type</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Confidence</th>
+              <th>Detected</th>
+            </tr>
+          </thead>
+          <tbody id="incident-tbody"></tbody>
+        </table>
+      </div>
+      <div id="incident-detail"></div>
+    </section>
+
+    <!-- ========== BASELINES PAGE ========== -->
+    <section class="page" id="page-baselines">
+      <div class="toolbar">
+        <select class="filter-select" id="bl-filter-service"><option value="">All services</option></select>
+        <select class="filter-select" id="bl-filter-metric"><option value="">All metrics</option></select>
+      </div>
+      <div class="baseline-grid" id="baseline-grid"></div>
+    </section>
+
+    <!-- ========== EVALUATION PAGE ========== -->
+    <section class="page" id="page-evaluation">
+      <div id="eval-content">
+        <div class="empty-state">
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          <div class="empty-title">No evaluation results yet</div>
+          <div class="empty-sub">Run the evaluation script to compute precision, recall and F1 against ground truth.</div>
+          <div class="code-block">python src/analysis/evaluate.py</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== ABOUT PAGE ========== -->
+    <section class="page" id="page-about">
+      <div class="chart-card" style="max-width:680px">
+        <div class="card-title">Log Analytics Platform</div>
+        <p style="font-size:var(--text-sm);color:var(--color-text-muted);line-height:1.7;margin-bottom:16px">
+          Statistical anomaly detection pipeline for microservice log data at scale.
+          Uses Z-score profiling over 5-minute aggregation windows to detect error rate spikes,
+          latency regressions and infrastructure saturation events.
+          Cross-correlates log-derived signals with CloudWatch infra metrics for root cause diagnosis.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="baseline-card" style="margin:0">
+            <div class="bl-service">Detection</div>
+            <div class="bl-metric">Z-score (3σ)</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted)">Primary: error_rate, latency_p95, http_5xx_rate<br>Infra: cpu, memory, asg_capacity, db_connections</div>
+          </div>
+          <div class="baseline-card" style="margin:0">
+            <div class="bl-service">Root Cause</div>
+            <div class="bl-metric">Decision Tree</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted)">Scenario A: ASG saturation<br>Scenario B: Resource contention<br>Scenario C: DB connection pool</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <a href="https://github.com/TiraWeb/log-analytics" target="_blank" class="btn btn-primary btn-sm">GitHub</a>
+          <span class="badge badge-source" style="align-self:center">OpenObserve</span>
+          <span class="badge badge-source" style="align-self:center">SQLite</span>
+          <span class="badge badge-source" style="align-self:center">CloudWatch</span>
+        </div>
+      </div>
+    </section>
+
+  </div><!-- /page-content -->
+</main>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API = '';
+const SECS_REFRESH = 60;
+
+// ── State
+let incidentData  = [];
+let baselineData  = [];
+let summaryData   = null;
+let selectedIncId = null;
+let refreshTimer  = null;
+let incChart      = null;
+let sevChart      = null;
+let tlChart       = null;
+
+// ── Chart colors (light mode)
+const C = {
+  critical: '#c0392b', high: '#c0710a', medium: '#8a7a00', low: '#2e7d32',
+  primary:  '#0a6e74', muted: '#a8a7a4', grid: 'rgba(0,0,0,0.06)',
+  resolved: '#2e7d32',
+};
+
+// ========== NAV ==========
+function navigate(page) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === 'page-' + page));
+  document.getElementById('page-title').textContent = page.charAt(0).toUpperCase() + page.slice(1);
+  if (page === 'baselines' && baselineData.length === 0) loadBaselines();
+  if (page === 'evaluation') loadEvaluation();
+}
+document.querySelectorAll('.nav-item[data-page]').forEach(el =>
+  el.addEventListener('click', () => navigate(el.dataset.page))
+);
+
+// ========== TOAST ==========
+function toast(msg, duration = 3000) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => t.remove(), duration);
+}
+
+// ========== API FETCH ==========
+async function api(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+// ========== OVERVIEW ==========
+async function loadOverview() {
+  try {
+    summaryData = await api('/api/summary');
+    renderKPIs(summaryData);
+    renderServiceGrid(summaryData);
+    renderSeverityChart(summaryData);
+    renderTimelineChart(summaryData);
+    document.getElementById('db-status').textContent = 'Database connected';
+    // Update badge
+    const openCount = (summaryData.totals.total || 0) - (summaryData.totals.resolved || 0);
+    document.getElementById('badge-incidents').textContent = openCount;
+  } catch(e) {
+    document.getElementById('db-status').textContent = 'DB unavailable';
+    toast('⚠️ Could not reach server. Is server.py running?');
+  }
+}
+
+function animateNum(el, target, decimals = 0) {
+  const start = 0, dur = 600, startTs = performance.now();
+  const fmt = n => decimals > 0 ? n.toFixed(decimals) : Math.round(n).toLocaleString();
+  function step(ts) {
+    const p = Math.min((ts - startTs) / dur, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmt(start + (target - start) * ease);
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function renderKPIs(d) {
+  const t = d.totals;
+  const open = (t.total||0) - (t.resolved||0);
+  const conf = t.avg_confidence ? (t.avg_confidence * 100) : 0;
+  document.getElementById('kpi-grid').innerHTML = `
+    <div class="kpi-card">
+      <div class="kpi-label">Total Incidents</div>
+      <div class="kpi-value" id="kv-total">0</div>
+      <div class="kpi-sub">all severities</div>
+    </div>
+    <div class="kpi-card critical">
+      <div class="kpi-label">Critical</div>
+      <div class="kpi-value" id="kv-critical">0</div>
+      <div class="kpi-sub">${t.critical ? '⚠️ needs attention' : '✅ clear'}</div>
+    </div>
+    <div class="kpi-card success">
+      <div class="kpi-label">Resolved</div>
+      <div class="kpi-value" id="kv-resolved">0</div>
+      <div class="kpi-sub">of ${t.total||0} total</div>
+    </div>
+    <div class="kpi-card primary">
+      <div class="kpi-label">Avg Confidence</div>
+      <div class="kpi-value" id="kv-conf">0</div>
+      <div class="kpi-sub">detection accuracy</div>
+    </div>
+  `;
+  animateNum(document.getElementById('kv-total'),    t.total||0);
+  animateNum(document.getElementById('kv-critical'), t.critical||0);
+  animateNum(document.getElementById('kv-resolved'), t.resolved||0);
+  animateNum(document.getElementById('kv-conf'),     conf, 1);
+  document.getElementById('kv-conf').textContent = conf.toFixed(1) + '%';
+  setTimeout(() => {
+    if (document.getElementById('kv-conf'))
+      document.getElementById('kv-conf').textContent = conf.toFixed(1) + '%';
+  }, 650);
+}
+
+function renderServiceGrid(d) {
+  const grid = document.getElementById('service-grid');
+  if (!d.services || d.services.length === 0) {
+    grid.innerHTML = '<div style="color:var(--color-text-faint);font-size:var(--text-sm)">No services with open incidents.</div>';
+    return;
+  }
+  grid.innerHTML = d.services.map(s => `
+    <div class="service-card" onclick="filterByService('${s.service_name}')">
+      <div class="service-name" title="${s.service_name}">${s.service_name}</div>
+      <div class="service-meta">
+        <span class="service-count">${s.open_incidents} open incident${s.open_incidents!==1?'s':''}</span>
+        <span class="badge badge-${s.worst_severity||'low'}">${s.worst_severity||'low'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderSeverityChart(d) {
+  const t = d.totals;
+  const canvas = document.getElementById('chart-severity');
+  if (sevChart) sevChart.destroy();
+  sevChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels: ['Critical','High','Medium','Low'],
+      datasets: [{
+        data: [t.critical||0, t.high||0, t.medium||0, t.low||0],
+        backgroundColor: [C.critical, C.high, C.medium, C.low],
+        borderWidth: 2,
+        borderColor: '#ffffff',
+        hoverOffset: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '60%',
+      plugins: {
+        legend: { position: 'right', labels: { font: { size: 11, family: 'Inter' }, padding: 12, boxWidth: 10 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw}` } },
+      }
+    }
+  });
+}
+
+function renderTimelineChart(d) {
+  const canvas = document.getElementById('chart-timeline');
+  if (tlChart) tlChart.destroy();
+  const trend = d.trend || [];
+  tlChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: trend.map(r => r.hour),
+      datasets: [{ label: 'Incidents', data: trend.map(r => r.count), backgroundColor: C.primary + 'bb', borderRadius: 3 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type: 'time', time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } }, grid: { color: C.grid }, ticks: { font: { size: 10 } } },
+        y: { beginAtZero: true, grid: { color: C.grid }, ticks: { font: { size: 10 }, stepSize: 1 } },
+      },
+      plugins: { legend: { display: false } },
+    }
+  });
+}
+
+// ========== INCIDENTS PAGE ==========
+async function loadIncidents() {
+  const svc = document.getElementById('filter-service').value;
+  const sev = document.getElementById('filter-severity').value;
+  const sta = document.getElementById('filter-status').value;
+  const q   = document.getElementById('incident-search').value.toLowerCase();
+
+  try {
+    let url = '/api/incidents?limit=200';
+    if (svc) url += '&service=' + encodeURIComponent(svc);
+    if (sev) url += '&severity=' + encodeURIComponent(sev);
+    if (sta) url += '&status=' + encodeURIComponent(sta);
+    incidentData = await api(url);
+
+    // Client-side text filter
+    const filtered = q ? incidentData.filter(i =>
+      i.service_name.toLowerCase().includes(q) ||
+      i.incident_type.toLowerCase().includes(q) ||
+      (i.description||'').toLowerCase().includes(q)
+    ) : incidentData;
+
+    renderIncidentTable(filtered);
+  } catch(e) {
+    toast('⚠️ Failed to load incidents');
+  }
+}
+
+function renderIncidentTable(rows) {
+  const tbody = document.getElementById('incident-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--color-text-faint)">No incidents found</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(i => {
+    const conf = i.confidence_score ? (i.confidence_score * 100).toFixed(0) : 0;
+    const ts   = new Date(i.timestamp).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    return `
+    <tr class="${selectedIncId === i.id ? 'selected' : ''}" data-id="${i.id}">
+      <td class="td-service" title="${i.service_name}">${i.service_name}</td>
+      <td class="td-type">${i.incident_type.replace(/_/g,' ')}</td>
+      <td><span class="badge badge-${i.severity}">${i.severity}</span></td>
+      <td><span class="badge badge-${i.resolved?'resolved':'open'}">${i.resolved?'resolved':'open'}</span></td>
+      <td>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar"><div class="conf-bar-fill" style="width:${conf}%"></div></div>
+          <span class="td-conf">${conf}%</span>
+        </div>
+      </td>
+      <td class="td-ts">${ts}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr[data-id]').forEach(row =>
+    row.addEventListener('click', () => {
+      const id = parseInt(row.dataset.id);
+      if (selectedIncId === id) {
+        selectedIncId = null;
+        document.getElementById('incident-detail').innerHTML = '';
+        tbody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
+      } else {
+        selectedIncId = id;
+        tbody.querySelectorAll('tr').forEach(r => r.classList.toggle('selected', parseInt(r.dataset.id) === id));
+        loadIncidentDetail(id);
+      }
+    })
+  );
+}
+
+async function loadIncidentDetail(id) {
+  const el = document.getElementById('incident-detail');
+  el.innerHTML = '<div class="detail-panel"><div style="padding:24px;color:var(--color-text-faint)">Loading…</div></div>';
+  try {
+    const d = await api('/api/incidents/' + id);
+    renderIncidentDetail(d);
+  } catch(e) {
+    el.innerHTML = '<div class="detail-panel"><div style="padding:24px;color:var(--color-error)">Failed to load incident detail</div></div>';
+  }
+}
+
+function parseRootCause(text) {
+  if (!text) return null;
+  const summaryMatch = text.match(/^([^.]+\.?)/);
+  const primaryMatch = text.match(/Primary metric[s]?:\s*([^.]+)/i);
+  const corrMatch    = text.match(/Correlated metric[s]?:\s*([^.]+)/i);
+  const actionMatch  = text.match(/Recommended action[s]?:\s*(.+)$/i);
+
+  const chips = raw => (raw||"").split(',').map(s=>s.trim()).filter(s=>s&&s.toLowerCase()!=='none')
+    .map(s=>`<span class="rc-chip">${s}</span>`).join('') || '<span style="color:var(--color-text-faint)">none</span>';
+
+  return {
+    summary: summaryMatch ? summaryMatch[1].trim() : text,
+    primary: chips(primaryMatch ? primaryMatch[1] : ''),
+    correlated: chips(corrMatch ? corrMatch[1] : ''),
+    action: actionMatch ? actionMatch[1].trim() : '',
+  };
+}
+
+function renderIncidentDetail(d) {
+  const inc = d.incident;
+  const ts  = new Date(inc.timestamp).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const conf = inc.confidence_score ? (inc.confidence_score * 100).toFixed(1) : '0';
+  const rc  = parseRootCause(inc.root_cause);
+
+  const rcHtml = rc ? `
+    <div class="rc-card">
+      <div class="rc-summary">${rc.summary}</div>
+      <div class="rc-row"><span class="rc-label">Primary</span><div>${rc.primary}</div></div>
+      <div class="rc-row"><span class="rc-label">Correlated</span><div>${rc.correlated}</div></div>
+      ${rc.action ? `<div class="rc-row"><span class="rc-label">Action</span><div class="rc-action">${rc.action}</div></div>` : ''}
+    </div>
+  ` : `<div style="font-size:var(--text-sm);color:var(--color-text-faint)">Run <code>python src/analysis/diagnose_root_cause.py</code> to diagnose.</div>`;
+
+  document.getElementById('incident-detail').innerHTML = `
+  <div class="detail-panel">
+    <div class="detail-header">
+      <div>
+        <div class="detail-service">${inc.service_name}</div>
+        <div class="detail-meta">
+          <span class="badge badge-${inc.severity}">${inc.severity}</span>
+          <span class="badge badge-${inc.resolved?'resolved':'open'}">${inc.resolved?'Resolved':'Open'}</span>
+          <span style="font-size:var(--text-xs);color:var(--color-text-faint)">${ts}</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        ${!inc.resolved ? `<button class="btn-resolve" onclick="resolveIncident(${inc.id})">Mark resolved</button>` : ''}
+      </div>
+    </div>
+    <div class="detail-body">
+      <div class="detail-col">
+        <div class="detail-section-title">Incident Details</div>
+        <div class="detail-field">
+          <span class="detail-key">Type</span>
+          <span class="detail-val" style="font-family:var(--font-mono);font-size:var(--text-xs)">${inc.incident_type.replace(/_/g,' ')}</span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-key">Confidence</span>
+          <span class="detail-val">${conf}%</span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-key">Affected Metrics</span>
+          <span class="detail-val" style="font-size:var(--text-xs);font-family:var(--font-mono);color:var(--color-text-muted)">${inc.affected_metrics||'—'}</span>
+        </div>
+        <div class="detail-field" style="margin-bottom:0">
+          <span class="detail-key">Description</span>
+          <span class="detail-val" style="font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.6">${inc.description||'—'}</span>
+        </div>
+      </div>
+      <div class="detail-col">
+        <div class="detail-section-title">Root Cause Analysis</div>
+        ${rcHtml}
+      </div>
+    </div>
+    <div class="metric-chart-wrap">
+      <div class="detail-section-title" style="margin-bottom:14px">Metric Timeline (±90 min around incident)</div>
+      <div style="height:220px"><canvas id="chart-incident"></canvas></div>
+    </div>
+  </div>`;
+
+  renderMetricChart(d, inc.timestamp);
+}
+
+function renderMetricChart(d, incTs) {
+  const canvas = document.getElementById('chart-incident');
+  if (!canvas) return;
+  if (incChart) { incChart.destroy(); incChart = null; }
+
+  const metrics = d.metrics || [];
+  if (!metrics.length) {
+    canvas.parentElement.innerHTML = '<div style="color:var(--color-text-faint);font-size:var(--text-sm);padding:20px 0">No metric data in this window.</div>';
+    return;
+  }
+
+  const COLORS = ['#0a6e74','#c0392b','#c0710a','#2e7d32','#6d4c9e','#1565c0'];
+  const metricNames = [...new Set(metrics.map(m => m.metric_name))];
+  const datasets = metricNames.map((name, i) => {
+    const pts = metrics.filter(m => m.metric_name === name)
+      .map(m => ({ x: m.timestamp, y: m.metric_value }));
+    return {
+      label: name, data: pts, borderColor: COLORS[i % COLORS.length],
+      backgroundColor: 'transparent', tension: 0.3, pointRadius: 2,
+      borderWidth: 1.5,
+    };
+  });
+
+  // Baselines as dashed lines
+  const baselines = d.baselines || [];
+  baselines.forEach((bl, i) => {
+    if (!metricNames.includes(bl.metric_name)) return;
+    if (!metrics.length) return;
+    const times = metrics.map(m => m.timestamp).sort();
+    datasets.push({
+      label: bl.metric_name + ' baseline',
+      data: [{ x: times[0], y: bl.mean }, { x: times[times.length-1], y: bl.mean }],
+      borderColor: COLORS[metricNames.indexOf(bl.metric_name) % COLORS.length] + '55',
+      borderDash: [4, 3], borderWidth: 1, pointRadius: 0, tension: 0,
+    });
+  });
+
+  incChart = new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+          grid: { color: C.grid },
+          ticks: { font: { size: 10 }, maxTicksLimit: 8 },
+        },
+        y: { grid: { color: C.grid }, ticks: { font: { size: 10 } } },
+      },
+      plugins: {
+        legend: { labels: { font: { size: 10, family: 'Inter' }, boxWidth: 10, padding: 10 },
+                  position: 'top', align: 'start' },
+        annotation: {
+          annotations: [{
+            type: 'line', scaleID: 'x', value: incTs,
+            borderColor: C.critical, borderWidth: 1.5, borderDash: [4, 3],
+            label: { content: 'incident', enabled: true, position: 'start',
+                     backgroundColor: C.critical, font: { size: 10 } }
+          }]
+        }
+      },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    }
+  });
+}
+
+async function resolveIncident(id) {
+  try {
+    await fetch(API + '/api/resolve/' + id, { method: 'POST' });
+    toast('✅ Incident #' + id + ' resolved');
+    selectedIncId = null;
+    loadIncidents();
+    loadOverview();
+    document.getElementById('incident-detail').innerHTML = '';
+  } catch(e) {
+    toast('⚠️ Failed to resolve');
+  }
+}
+
+// ========== BASELINES PAGE ==========
+async function loadBaselines() {
+  try {
+    baselineData = await api('/api/baselines');
+    // Populate filters
+    const svcSel = document.getElementById('bl-filter-service');
+    const metSel = document.getElementById('bl-filter-metric');
+    const svcs   = [...new Set(baselineData.map(b => b.service_name))].sort();
+    const mets   = [...new Set(baselineData.map(b => b.metric_name))].sort();
+    svcSel.innerHTML = '<option value="">All services</option>' + svcs.map(s=>`<option>${s}</option>`).join('');
+    metSel.innerHTML = '<option value="">All metrics</option>'  + mets.map(m=>`<option>${m}</option>`).join('');
+    renderBaselineGrid();
+  } catch(e) {
+    toast('⚠️ Failed to load baselines');
+  }
+}
+
+function renderBaselineGrid() {
+  const svc = document.getElementById('bl-filter-service').value;
+  const met = document.getElementById('bl-filter-metric').value;
+  let rows = baselineData;
+  if (svc) rows = rows.filter(b => b.service_name === svc);
+  if (met) rows = rows.filter(b => b.metric_name  === met);
+
+  const grid = document.getElementById('baseline-grid');
+  if (!rows.length) {
+    grid.innerHTML = '<div style="color:var(--color-text-faint);font-size:var(--text-sm)">No baselines found — run the pipeline first.</div>';
+    return;
+  }
+  grid.innerHTML = rows.map(b => `
+    <div class="baseline-card">
+      <div class="bl-service">${b.service_name}</div>
+      <div class="bl-metric">${b.metric_name}</div>
+      <div class="bl-stats">
+        <div class="bl-stat"><div class="bl-stat-label">Mean</div><div class="bl-stat-val">${fmt(b.mean)}</div></div>
+        <div class="bl-stat"><div class="bl-stat-label">σ StdDev</div><div class="bl-stat-val">${fmt(b.stddev)}</div></div>
+        <div class="bl-stat"><div class="bl-stat-label">p95</div><div class="bl-stat-val">${fmt(b.p95)}</div></div>
+        <div class="bl-stat"><div class="bl-stat-label">p99</div><div class="bl-stat-val">${fmt(b.p99)}</div></div>
+      </div>
+      <div class="bl-samples">${(b.sample_count||0).toLocaleString()} samples</div>
+    </div>
+  `).join('');
+}
+
+function fmt(v) { return v != null ? parseFloat(v).toFixed(2) : '—'; }
+
+// ========== EVALUATION PAGE ==========
+async function loadEvaluation() {
+  try {
+    const e = await api('/api/evaluate');
+    renderEvaluation(e);
+  } catch(err) {
+    // Leave the empty state shown
+  }
+}
+
+function scoreClass(v) {
+  if (v >= 0.8) return 'score-good';
+  if (v >= 0.5) return 'score-ok';
+  return 'score-bad';
+}
+
+function renderEvaluation(e) {
+  const el = document.getElementById('eval-content');
+  const perSvc = e.per_service || {};
+
+  const perSvcRows = Object.entries(perSvc).map(([svc, s]) => `
+    <tr>
+      <td style="font-weight:600">${svc}</td>
+      <td>${s.tp}</td><td>${s.fp}</td><td>${s.fn}</td>
+      <td class="${scoreClass(s.precision)}">${(s.precision*100).toFixed(1)}%</td>
+      <td class="${scoreClass(s.recall)}">${(s.recall*100).toFixed(1)}%</td>
+      <td class="${scoreClass(s.f1)}">${(s.f1*100).toFixed(1)}%</td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="eval-hero">
+      <div class="eval-metric-card">
+        <div class="eval-label">Precision</div>
+        <div class="eval-score ${scoreClass(e.precision)}">${(e.precision*100).toFixed(1)}%</div>
+        <div class="eval-sub">TP / (TP + FP)</div>
+      </div>
+      <div class="eval-metric-card">
+        <div class="eval-label">Recall</div>
+        <div class="eval-score ${scoreClass(e.recall)}">${(e.recall*100).toFixed(1)}%</div>
+        <div class="eval-sub">TP / (TP + FN)</div>
+      </div>
+      <div class="eval-metric-card">
+        <div class="eval-label">F1 Score</div>
+        <div class="eval-score ${scoreClass(e.f1)}">${(e.f1*100).toFixed(1)}%</div>
+        <div class="eval-sub">Harmonic mean</div>
+      </div>
+    </div>
+    <div class="confusion-row">
+      <div class="confusion-cell"><div class="confusion-num confusion-tp">${e.tp}</div><div class="confusion-label">True Positives</div></div>
+      <div class="confusion-cell"><div class="confusion-num confusion-fp">${e.fp}</div><div class="confusion-label">False Positives</div></div>
+      <div class="confusion-cell"><div class="confusion-num confusion-fn">${e.fn}</div><div class="confusion-label">False Negatives</div></div>
+    </div>
+    <div class="chart-card" style="margin-bottom:20px">
+      <div class="card-title">Per-Service Breakdown</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Service</th><th>TP</th><th>FP</th><th>FN</th><th>Precision</th><th>Recall</th><th>F1</th></tr></thead>
+          <tbody>${perSvcRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div style="font-size:var(--text-xs);color:var(--color-text-faint)">
+      Generated ${new Date(e.generated_at).toLocaleString()} · ±${e.tolerance_minutes}min match window · ${e.ground_truth_count} ground truth incidents
+    </div>
+  `;
+}
+
+// ========== FILTER HELPERS ==========
+function filterByService(svc) {
+  navigate('incidents');
+  document.getElementById('filter-service').value = svc;
+  loadIncidents();
+}
+
+document.getElementById('btn-clear-filters').addEventListener('click', () => {
+  document.getElementById('filter-service').value   = '';
+  document.getElementById('filter-severity').value  = '';
+  document.getElementById('filter-status').value    = '';
+  document.getElementById('incident-search').value  = '';
+  loadIncidents();
+});
+
+['filter-service','filter-severity','filter-status'].forEach(id =>
+  document.getElementById(id).addEventListener('change', loadIncidents)
+);
+document.getElementById('incident-search').addEventListener('input', loadIncidents);
+
+['bl-filter-service','bl-filter-metric'].forEach(id =>
+  document.getElementById(id).addEventListener('change', renderBaselineGrid)
+);
+
+// ========== REFRESH ==========
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  loadOverview();
+  if (document.querySelector('.nav-item.active').dataset.page === 'incidents') loadIncidents();
+  toast('↺ Refreshed');
+});
+
+// ========== POPULATE SERVICE FILTER ==========
+async function populateServiceFilter() {
+  try {
+    const svcs = await api('/api/services');
+    const sel  = document.getElementById('filter-service');
+    sel.innerHTML = '<option value="">All services</option>' +
+      svcs.map(s => `<option value="${s}">${s}</option>`).join('');
+  } catch(e) {}
+}
+
+// ========== INIT ==========
+(async function init() {
+  await loadOverview();
+  await populateServiceFilter();
+  loadIncidents();
+  // Auto-refresh every 60 s
+  refreshTimer = setInterval(() => {
+    loadOverview();
+    if (document.querySelector('.nav-item.active').dataset.page === 'incidents') loadIncidents();
+  }, SECS_REFRESH * 1000);
+})();
+</script>
+</body>
+</html>
