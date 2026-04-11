@@ -1,44 +1,82 @@
-# OpenObserve Configuration
-openobserve:
-  url: "http://localhost:5080"
-  username: "admin@example.com"
-  password: "admin123"
-  organization: "default"
-  stream_name: "microservice_logs"
-  batch_size: 1000
-  timeout: 30
+# ── OpenSearch / OpenObserve ──────────────────────────────────────────────────
+# Used by: src/utils/opensearch_client.py  &  src/ingestion/opensearch_ingest.py
+#
+# For a self-hosted OpenSearch cluster:
+#   url: http://<host>:9200
+#   is_openobserve: false
+#
+# For OpenObserve (OpenSearch-compatible endpoint):
+#   url: http://<host>:5080
+#   is_openobserve: true
+#
+# For AWS OpenSearch Service, set url to the domain endpoint and supply
+# credentials via env vars (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+# or an IAM role — boto3 SigV4 signing is handled automatically if
+# you install the requests-aws4auth package.
+opensearch:
+  url:            "http://localhost:5080"   # change to your cluster endpoint
+  username:       "admin@example.com"
+  password:       "admin123"
+  is_openobserve: true                      # set false for vanilla OpenSearch
 
-# Database Configuration
+  # Index / stream to query
+  index:          "microservice_logs"
+
+  # Scroll API page size — keep at 1000 for 6.5 TB/month scale
+  # (aggregation path never fetches raw docs, so this only matters
+  #  when you run with --scroll)
+  scroll_size:    1000
+
+  # Request timeout in seconds
+  timeout:        30
+
+  # ── Field name mappings ──────────────────────────────────────────────────
+  # Change these if your index uses different field names.
+  # _timestamp is the default for OpenObserve; @timestamp for vanilla OS.
+  field_timestamp:   "_timestamp"
+  field_service:     "service_name"
+  field_level:       "log_level"
+  field_latency:     "latency_ms"
+  field_status_code: "status_code"
+
+  # ── Legacy OpenObserve SQL endpoint (kept for backward compat) ───────────
+  organization: "default"
+  stream_name:  "microservice_logs"
+  batch_size:   1000
+
+# ── AWS CloudWatch ────────────────────────────────────────────────────────────
+# Used by: src/ingestion/cloudwatch_ingest.py
+aws:
+  region:         "ap-southeast-1"
+  ecs_cluster:    ""   # e.g. my-production-cluster
+  rds_cluster_id: ""   # e.g. my-aurora-cluster  (leave blank to skip)
+  alb_arn_suffix: ""   # e.g. app/my-alb/abc123  (leave blank to skip)
+
+# ── SQLite Database ───────────────────────────────────────────────────────────
 database:
-  path: "data/analytics.db"
+  path:               "data/analytics.db"
   connection_timeout: 30
 
-# Analysis Configuration
+# ── Analysis ──────────────────────────────────────────────────────────────────
 analysis:
-  baseline_window_hours: 24
-  anomaly_threshold_sigma: 3.0
+  baseline_window_hours:    24
+  anomaly_threshold_sigma:  3.0
   min_samples_for_baseline: 100
-  correlation_threshold: 0.7
-  
-# Metrics Configuration
+  correlation_threshold:    0.7
+
+# ── Metrics collection ────────────────────────────────────────────────────────
 metrics:
   collection_interval_minutes: 5
-  retention_days: 30
-  
-# Service Discovery
-services:
-  # Automatically discovered from logs
-  # Expected format: service_name-type-identifier
-  # Examples: Internal-core-ms, External-core-ms-2, User-ms-3, Chargebee-EH-4
-  
-# Logging
+  retention_days:              30
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging:
-  level: "INFO"
+  level:  "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "logs/application.log"
-  
-# Dashboard
+  file:   "logs/application.log"
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
 dashboard:
-  title: "Log Analytics Platform"
+  title:                    "Log Analytics Platform"
   refresh_interval_seconds: 60
-  max_incidents_display: 50
+  max_incidents_display:    50

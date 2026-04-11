@@ -1,19 +1,25 @@
-# Core dependencies
+# Core
 pandas>=2.0.0
 numpy>=1.24.0
 requests>=2.31.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
+urllib3>=2.0.0
 
-# NOTE: sqlite3 is built into Python's standard library - no pip install needed
+# OpenSearch / OpenObserve
+opensearch-py>=2.4.0
+# Optional — only needed for AWS OpenSearch Service with IAM auth:
+# requests-aws4auth>=1.3.0
+
+# AWS CloudWatch
+boto3>=1.34.0
 
 # Analysis & ML
 scipy>=1.11.0
 scikit-learn>=1.3.0
 
-# Dashboard
-streamlit>=1.28.0
-plotly>=5.17.0
+# Dashboard (custom HTML UI served via Flask)
+flask>=3.0.0
 
 # Testing
 pytest>=7.4.0

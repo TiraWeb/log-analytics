@@ -1,11 +1,16 @@
 """ETL pipeline: parse real CSV logs → aggregate into per-minute metrics → SQLite.
 
-This replaces the OpenObserve dependency entirely for the offline sandbox model.
+Supports two sources via --source flag:
+  csv         (default) — read CSV files from data/raw_logs/
+  opensearch            — pull live data from OpenSearch/OpenObserve
+  both                  — run CSV first, then OpenSearch
+
 Parsed logs are aggregated into time-bucketed error_rate and latency_p95 metrics
-and written directly into the existing `metrics` table (source='logs').
-This lets the existing baseline + detection pipeline consume them unchanged.
+and written directly into the existing `metrics` table (source='logs' or
+source='opensearch').
 """
 import sys
+import argparse
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -23,19 +28,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Bucket size for time-series aggregation
+# Bucket size for time-series aggregation — keep in sync with
+# opensearch_ingest._BUCKET_MINUTES so metrics are comparable
 BUCKET_MINUTES = 5
 
 
 def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
     """Aggregate parsed log DataFrame into per-bucket metric rows.
 
-    Produces two metric series per service:
-      - error_rate  : errors per minute in the bucket
-      - latency_p95 : 95th-percentile latency_ms in the bucket
+    Produces up to three metric series per service:
+      - error_rate   : errors per minute in the bucket (% of total)
+      - latency_p95  : 95th-percentile latency_ms in the bucket
+      - http_5xx_rate: HTTP 5xx responses as % of total in the bucket
 
     Args:
-        df: Parsed DataFrame from LogParser.parse_csv_file()
+        df: Parsed DataFrame — must contain columns:
+              timestamp_dt (datetime), is_error (0/1),
+              latency_ms (float, nullable), status_code (float, nullable)
         service_name: service name string
 
     Returns:
@@ -44,14 +53,12 @@ def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
     if df.empty:
         return []
 
-    # Ensure we have a proper datetime index
     df = df.copy()
     df['timestamp_dt'] = pd.to_datetime(df['timestamp_dt'], utc=True, errors='coerce')
     df = df.dropna(subset=['timestamp_dt'])
     if df.empty:
         return []
 
-    # Remove tz for grouping (SQLite stores naive ISO strings)
     df['ts_naive'] = df['timestamp_dt'].dt.tz_localize(None)
     df = df.set_index('ts_naive').sort_index()
 
@@ -73,7 +80,7 @@ def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
             'source':       'logs',
         })
 
-    # --- latency_p95 (only for rows that have latency data) ---
+    # --- latency_p95 ---
     lat_df = df.dropna(subset=['latency_ms'])
     if not lat_df.empty:
         lat_series = lat_df['latency_ms'].resample(freq).quantile(0.95)
@@ -89,7 +96,7 @@ def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
                 'source':       'logs',
             })
 
-    # --- 5xx_rate ---
+    # --- http_5xx_rate ---
     http_df = df.dropna(subset=['status_code']).copy()
     if not http_df.empty:
         http_df['is_5xx'] = http_df['status_code'].astype(float) >= 500
@@ -113,8 +120,7 @@ def aggregate_to_metrics(df: pd.DataFrame, service_name: str) -> List[Dict]:
 def ingest_csv_file(filepath: Path, parser: LogParser, db: DatabaseManager) -> int:
     """Parse one CSV, aggregate, and write metrics to SQLite.
 
-    Returns:
-        Number of metric rows inserted.
+    Returns number of metric rows inserted.
     """
     service_name = filepath.stem
     logger.info(f"Ingesting {filepath.name}  (service={service_name})")
@@ -154,36 +160,88 @@ def ingest_csv_file(filepath: Path, parser: LogParser, db: DatabaseManager) -> i
     return inserted
 
 
-def main():
+def run_csv(db: DatabaseManager) -> int:
     """Ingest all CSV log files from data/raw_logs/ into SQLite."""
-    logger.info("Starting log ingestion pipeline")
+    logger.info("[CSV] Starting log ingestion pipeline")
 
     raw_logs_dir = Path("data/raw_logs")
     if not raw_logs_dir.exists():
         logger.error(f"Directory not found: {raw_logs_dir}")
-        logger.info("Creating directory — please copy CSV files there and re-run.")
+        logger.info("Creating directory — copy CSV files there and re-run.")
         raw_logs_dir.mkdir(parents=True, exist_ok=True)
-        return 1
+        return 0
 
     csv_files = sorted(raw_logs_dir.glob("*.csv"))
     if not csv_files:
         logger.warning(f"No CSV files in {raw_logs_dir}")
-        return 1
+        return 0
 
     parser = LogParser()
-    db = DatabaseManager()
     total_rows = 0
 
     for csv_file in csv_files:
         total_rows += ingest_csv_file(csv_file, parser, db)
 
     stats = parser.get_stats()
-    logger.info("\n=== INGESTION SUMMARY ===")
+    logger.info("\n=== CSV INGESTION SUMMARY ===")
     logger.info(f"Files processed : {len(csv_files)}")
     logger.info(f"Total log lines : {stats['total_lines']}")
     logger.info(f"Parsed          : {stats['parsed_lines']}")
     logger.info(f"Failed          : {stats['failed_lines']}")
     logger.info(f"Metric rows     : {total_rows}")
+    return total_rows
+
+
+def run_opensearch(hours: int = 24, use_scroll: bool = False,
+                   service: Optional[str] = None) -> int:
+    """Delegate to opensearch_ingest.OpenSearchIngestor."""
+    from src.ingestion.opensearch_ingest import OpenSearchIngestor
+    ingestor = OpenSearchIngestor(
+        hours=hours,
+        use_scroll=use_scroll,
+        target_service=service,
+    )
+    return ingestor.run()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Ingest logs into SQLite from CSV files or OpenSearch"
+    )
+    parser.add_argument(
+        "--source",
+        choices=["csv", "opensearch", "both"],
+        default="csv",
+        help="Data source: csv (default) | opensearch | both",
+    )
+    parser.add_argument(
+        "--hours", type=int, default=24,
+        help="Hours to look back when using OpenSearch source (default: 24)"
+    )
+    parser.add_argument(
+        "--scroll", action="store_true",
+        help="Use scroll API instead of aggregations (OpenSearch source only)"
+    )
+    parser.add_argument(
+        "--service", type=str, default=None,
+        help="Limit OpenSearch ingestion to a single service"
+    )
+    args = parser.parse_args()
+
+    db    = DatabaseManager()
+    total = 0
+
+    if args.source in ("csv", "both"):
+        total += run_csv(db)
+
+    if args.source in ("opensearch", "both"):
+        total += run_opensearch(
+            hours=args.hours,
+            use_scroll=args.scroll,
+            service=args.service,
+        )
+
+    logger.info(f"\nTotal metric rows written: {total}")
     return 0
 
 
